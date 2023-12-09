@@ -29,7 +29,8 @@ RUN_KUBECTL = $(KUBECTL) --context kind-$(KIND_CLUSTER)
 
 setup: $(KIND) $(KUBECTL) $(ISTIOCTL)
 	$(KIND) create cluster --name $(KIND_CLUSTER) --image=$(KIND_NODE_IMAGE)
-	$(ISTIOCTL) install -y --set profile=demo
+	$(ISTIOCTL) install -y --set profile=demo \
+		--set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY
 	while true; do \
 		if $(ISTIOCTL) verify-install >/dev/null; then break; fi; \
 		sleep 1; \
