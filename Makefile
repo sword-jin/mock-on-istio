@@ -35,29 +35,28 @@ setup: $(KIND) $(KUBECTL) $(ISTIOCTL)
 		if $(ISTIOCTL) verify-install >/dev/null; then break; fi; \
 		sleep 1; \
 	done
+	
+	$(RUN_KUBECTL) label namespace default istio-injection=enabled --overwrite
+	$(RUN_KUBECTL) create ns mesh-external
 
 	$(MAKE) build
 	$(MAKE) docker-push
-	-$(MAKE) generate-certs
+	$(MAKE) generate-certs
 
-	$(RUN_KUBECTL) label namespace default istio-injection=enabled --overwrite
-	$(RUN_KUBECTL) apply -f ./manifests
 	$(MAKE) apply-sleep
+	$(RUN_KUBECTL) apply -f ./manifests
 
 generate-certs:
-	openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -subj '/O=example Inc./CN=slack.com' -keyout slack.com.key -out slack.com.crt
-
-	openssl req -out my-nginx.mock.svc.cluster.local.csr -newkey rsa:2048 -nodes -keyout my-nginx.mock.svc.cluster.local.key -subj "/CN=my-nginx.mock.svc.cluster.local/O=some organization"
-	openssl x509 -req -sha256 -days 365 -CA slack.com.crt -CAkey slack.com.key -set_serial 0 -in my-nginx.mock.svc.cluster.local.csr -out my-nginx.mock.svc.cluster.local.crt
-
-	openssl req -out client.slack.com.csr -newkey rsa:2048 -nodes -keyout client.slack.com.key -subj "/CN=client.slack.com/O=client organization"
-	openssl x509 -req -sha256 -days 365 -CA slack.com.crt -CAkey slack.com.key -set_serial 1 -in client.slack.com.csr -out client.slack.com.crt
-
-	$(KUBECTL) create -n mock secret tls nginx-server-certs --key my-nginx.mock.svc.cluster.local.key --cert my-nginx.mock.svc.cluster.local.crt
-	$(KUBECTL) create -n mock secret generic nginx-ca-certs --from-file=slack.com.crt
-	$(KUBECTL) create secret -n istio-system generic client-credential --from-file=tls.key=client.slack.com.key \
-  --from-file=tls.crt=client.slack.com.crt --from-file=ca.crt=slack.com.crt
-	$(KUBECTL) create configmap nginx-configmap -n mock --from-file=nginx.conf=./nginx.conf
+	openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -subj '/O=example Inc./CN=example.com' -keyout example.com.key -out example.com.crt
+	openssl req -out my-nginx.mesh-external.svc.cluster.local.csr -newkey rsa:2048 -nodes -keyout my-nginx.mesh-external.svc.cluster.local.key -subj "/CN=my-nginx.mesh-external.svc.cluster.local/O=some organization"
+	openssl x509 -req -sha256 -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 0 -in my-nginx.mesh-external.svc.cluster.local.csr -out my-nginx.mesh-external.svc.cluster.local.crt
+	openssl req -out client.example.com.csr -newkey rsa:2048 -nodes -keyout client.example.com.key -subj "/CN=client.example.com/O=client organization"
+	openssl x509 -req -sha256 -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 1 -in client.example.com.csr -out client.example.com.crt
+	$(RUN_KUBECTL) create -n mesh-external secret tls nginx-server-certs --key my-nginx.mesh-external.svc.cluster.local.key --cert my-nginx.mesh-external.svc.cluster.local.crt
+	$(RUN_KUBECTL) create -n mesh-external secret generic nginx-ca-certs --from-file=example.com.crt
+	$(RUN_KUBECTL) create configmap nginx-configmap -n mesh-external --from-file=nginx.conf=./nginx.conf
+	$(RUN_KUBECTL) create secret -n istio-system generic client-credential --from-file=tls.key=client.example.com.key \
+  --from-file=tls.crt=client.example.com.crt --from-file=ca.crt=example.com.crt
 
 try:
 	$(RUN_KUBECTL) exec -it $(shell $(RUN_KUBECTL) get pod -l app=sleep -o jsonpath='{.items[0].metadata.name}') -- curl -sS http://foo.default.svc:8080
@@ -69,7 +68,7 @@ stop:
 build:
 	CGO_ENABLED=0 go build -o bin/foo -gcflags=all="-N -l" main.go
 	docker build -t foo:test . --build-arg SERVICE=foo
-	CGO_ENABLED=0 go build -o bin/mock -gcflags=all="-N -l" main.go
+	CGO_ENABLED=0 go build -o bin/mock -gcflags=all="-N -l" mock/main.go
 	docker build -t mock:test . --build-arg SERVICE=mock
 
 reploy:
@@ -85,8 +84,8 @@ docker-push: $(KIND)
 	$(KIND) load docker-image --name $(KIND_CLUSTER) mock:test
 
 restart-deployment: $(KUBECTL)
-	$(KUBECTL) rollout restart deployment foo
-	$(KUBECTL) rollout restart deployment mock -n mock
+	$(RUN_KUBECTL) rollout restart deployment foo
+	$(RUN_KUBECTL) rollout restart deployment mock -n mock
 
 $(KUBECTL):
 	mkdir -p $(BIN_DIR)

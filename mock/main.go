@@ -53,6 +53,8 @@ func main() {
 			log.Println(err)
 		}
 	}()
+
+	select {}
 }
 
 func genX509KeyPair() tls.Certificate {

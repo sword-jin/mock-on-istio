@@ -9,101 +9,43 @@ spec:
   - number: 443
     name: https
     protocol: HTTPS
+  - number: 80
+    name: http
+    protocol: HTTP
   resolution: DNS
   location: MESH_EXTERNAL
 ---
-# apiVersion: networking.istio.io/v1alpha3
-# kind: Gateway
-# metadata:
-#   name: istio-egressgateway
-# spec:
-#   selector:
-#     istio: egressgateway
-#   servers:
-#   - port:
-#       number: 443
-#       name: https-port-for-tls-origination
-#       protocol: HTTPS
-#     hosts:
-#     - slack.com
-#     tls:
-#       mode: ISTIO_MUTUAL
-# ---
-# apiVersion: networking.istio.io/v1alpha3
-# kind: DestinationRule
-# metadata:
-#   name: egressgateway-for-slack
-# spec:
-#   host: istio-egressgateway.istio-system.svc.cluster.local
-#   subsets:
-#   - name: slack
-#     trafficPolicy:
-#       loadBalancer:
-#         simple: ROUND_ROBIN
-#       portLevelSettings:
-#       - port:
-#           number: 443
-#         tls:
-#           mode: ISTIO_MUTUAL
-#           sni: slack.com
-# ---
-# apiVersion: networking.istio.io/v1alpha3
-# kind: VirtualService
-# metadata:
-#   name: direct-slack-through-egress-gateway
-# spec:
-#   hosts:
-#   - slack.com
-#   gateways:
-#   - istio-egressgateway
-#   - mesh
-#   tls:
-#   - match:
-#     # pod -> egressgateway
-#     - gateways:
-#       - mesh
-#       port: 443
-#       sniHosts:
-#         - slack.com
-#     route:
-#     - destination:
-#         host: istio-egressgateway.istio-system.svc.cluster.local
-#         subset: slack
-#         port:
-#           number: 443
-#       weight: 100
 #################
 #     NGINX     #
 #################
----
 apiVersion: v1
 kind: Service
 metadata:
   name: my-nginx
-  namespace: mock
+  namespace: mesh-external
   labels:
-    app: my-nginx
+    run: my-nginx
 spec:
   ports:
   - port: 443
     protocol: TCP
   selector:
-    app: my-nginx
+    run: my-nginx
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: my-nginx
-  namespace: mock
+  namespace: mesh-external
 spec:
   selector:
     matchLabels:
-      app: my-nginx
+      run: my-nginx
   replicas: 1
   template:
     metadata:
       labels:
-        app: my-nginx
+        run: my-nginx
     spec:
       containers:
       - name: my-nginx
@@ -144,7 +86,7 @@ spec:
       name: https
       protocol: HTTPS
     hosts:
-    - my-nginx.mock.svc.cluster.local
+    - my-nginx.mesh-external.svc.cluster.local
     tls:
       mode: ISTIO_MUTUAL
 ---
@@ -164,26 +106,7 @@ spec:
           number: 443
         tls:
           mode: ISTIO_MUTUAL
-          sni: my-nginx.mock.svc.cluster.local
----
-#              mtls
-# mtls gateway <==> nginx
-apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
-metadata:
-  name: originate-mtls-for-nginx
-spec:
-  host: my-nginx.mock.svc.cluster.local
-  trafficPolicy:
-    loadBalancer:
-      simple: ROUND_ROBIN
-    portLevelSettings:
-    - port:
-        number: 443
-      tls:
-        mode: MUTUAL
-        credentialName: client-credential # this must match the secret created earlier to hold client certs
-        sni: my-nginx.mock.svc.cluster.local
+          sni: my-nginx.mesh-external.svc.cluster.local
 ---
 # route slack.com -> gateway
 apiVersion: networking.istio.io/v1alpha3
@@ -193,24 +116,94 @@ metadata:
 spec:
   hosts:
   - slack.com
+  gateways:
+  - mesh
+  - istio-egressgateway
   tls:
   - match:
-    - port: 443
+    - gateways:
+      - mesh
+      port: 443
       sniHosts:
       - slack.com
     route:
     - destination:
-        host: istio-egressgateway.istio-system.svc.cluster.local
-        subset: ngnix
+        host: slack.com
+        subset: slack
         port:
           number: 443
+      weight: 100
   http:
   - match:
-    - port: 443
+    - gateways:
+      - mesh
+      port: 80
+    route:
+    - destination:
+        host: slack.com
+        subset: slack
+        port:
+          number: 443
+      weight: 100
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 443
+    route:
+    - destination:
+        host: slack.com
+        port:
+          number: 443
+      weight: 100
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: direct-nginx-through-egress-gateway
+spec:
+  hosts:
+  - my-nginx.mesh-external.svc.cluster.local
+  gateways:
+  - istio-egressgateway
+  - mesh
+  http:
+  - match:
+    - gateways:
+      - mesh
+      port: 80
     route:
     - destination:
         host: istio-egressgateway.istio-system.svc.cluster.local
-        subset: ngnix
+        subset: nginx
         port:
           number: 443
-
+      weight: 100
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 443
+    route:
+    - destination:
+        host: my-nginx.mesh-external.svc.cluster.local
+        port:
+          number: 443
+      weight: 100
+---
+#              mtls
+# mtls gateway <==> nginx
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: originate-mtls-for-nginx
+spec:
+  host: my-nginx.mesh-external.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    portLevelSettings:
+    - port:
+        number: 443
+      tls:
+        mode: MUTUAL
+        credentialName: client-credential # this must match the secret created earlier to hold client certs
+        sni: my-nginx.mesh-external.svc.cluster.local
