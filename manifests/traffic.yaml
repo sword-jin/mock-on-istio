@@ -87,6 +87,7 @@ spec:
       protocol: HTTPS
     hosts:
     - my-nginx.mesh-external.svc.cluster.local
+    - slack.com
     tls:
       mode: ISTIO_MUTUAL
 ---
@@ -119,20 +120,6 @@ spec:
   gateways:
   - mesh
   - istio-egressgateway
-  tls:
-  - match:
-    - gateways:
-      - mesh
-      port: 443
-      sniHosts:
-      - slack.com
-    route:
-    - destination:
-        host: slack.com
-        subset: slack
-        port:
-          number: 443
-      weight: 100
   http:
   - match:
     - gateways:
@@ -140,8 +127,8 @@ spec:
       port: 80
     route:
     - destination:
-        host: slack.com
-        subset: slack
+        host: istio-egressgateway.istio-system.svc.cluster.local
+        subset: nginx
         port:
           number: 443
       weight: 100
@@ -151,7 +138,7 @@ spec:
       port: 443
     route:
     - destination:
-        host: slack.com
+        host: my-nginx.mesh-external.svc.cluster.local
         port:
           number: 443
       weight: 100
